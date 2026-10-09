@@ -1,4 +1,32 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
+# Environment variables & secrets (CRITICAL: Do not commit your keys)
 .env
+.env.*
+!.env.example
+
+# Virtual environments
+venv/
+env/
+ENV/
 .venv/
+
+# IDE / Editor specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Large raw datasets (Keeps git repo light and pushes fast)
+*.csv
+
+# Python / Model artifacts (Optional: ignore local train logs)
+*.log
+.pytest_cache/
