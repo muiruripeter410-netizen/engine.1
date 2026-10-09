@@ -35,23 +35,16 @@ class CandlePayload(BaseModel):
     ema200: float
 
 def calculate_dynamic_threshold(news_vector: dict, memory_metrics: dict) -> float:
-    """
-    Computes a non-rigid, adaptive threshold based on real-time market context.
-    """
-    # 1. Base statistical edge baseline (52% minimum confidence)
     base_threshold = 0.52
     
-    # 2. Proximity to high-impact economic news adjustment
     news_adj = 0.0
     mins_to_news = news_vector.get('minutes_to_news', 9999)
     if mins_to_news < 30 and news_vector.get('news_impact_rating', 0) >= 2:
-        news_adj = 0.08  # Tighten threshold slightly during news volatility
+        news_adj = 0.08
         
-    # 3. Structural trend alignment adjustment from memory
     drift = memory_metrics.get('hist_drift_multiplier', 1.0)
     drift_adj = -0.02 if drift > 1.1 else 0.0
 
-    # Combine context factors and clamp strictly between 51% and 65%
     calculated_threshold = base_threshold + news_adj + drift_adj
     return max(0.51, min(0.65, calculated_threshold))
 
@@ -69,19 +62,17 @@ def read_root():
 
 @app.post("/api/analyze")
 def analyze_candle(payload: CandlePayload):
-    # 1. Fetch News Feature Vector (<3ms)
+    # 1. Fetch Context Features (<3ms)
     news_vector = news_engine.get_news_feature_vector(payload.time)
-    
-    # 2. Fetch Active Memory Target Metrics
     metrics = memory_engine.get_active_metrics()
 
-    # 3. XGBoost Inference
+    # 2. XGBoost Inference
     ai_prob = 0.50
     if xgb_data and "model" in xgb_data:
         try:
             returns = (payload.close - payload.open) / payload.open
             high_low_ratio = (payload.high - payload.low) / payload.close
-            rsi = 50.0  # Placeholder for live feature array
+            rsi = 50.0
             ema_dist = (payload.close - payload.ema200) / payload.close
 
             features = pd.DataFrame([{
@@ -100,27 +91,27 @@ def analyze_candle(payload: CandlePayload):
         except Exception as e:
             print(f"[Main] XGBoost inference warning: {e}")
 
-    # 4. Compute Dynamic Context Threshold
+    # 3. Dynamic Threshold Calculation
     dynamic_threshold = calculate_dynamic_threshold(news_vector, metrics)
 
-    # 5. Filter Gates
-    volatility_passed = (payload.high - payload.low) > 0.30  # Relaxed range filter (> $0.30)
-    volume_passed = payload.volume > 100                     # Relaxed volume filter (> 100)
+    # 4. Filter Gates
+    # Gate 1 (EMA) is intentionally disabled to allow AI-driven reversal entries
+    g1_passed = True
+    volatility_passed = (payload.high - payload.low) > 0.30
+    volume_passed = payload.volume > 100
     memory_passed = True
 
-    # BUY Gates Check
-    buy_g1 = payload.close > payload.ema200
+    # BUY Gates
     buy_g4 = payload.close > payload.open
     buy_g6 = ai_prob >= dynamic_threshold
-    buy_passed = buy_g1 and volatility_passed and volume_passed and buy_g4 and memory_passed and buy_g6
+    buy_passed = g1_passed and volatility_passed and volume_passed and buy_g4 and memory_passed and buy_g6
 
-    # SELL Gates Check
-    sell_g1 = payload.close < payload.ema200
+    # SELL Gates
     sell_g4 = payload.close < payload.open
     sell_g6 = (1.0 - ai_prob) >= dynamic_threshold
-    sell_passed = sell_g1 and volatility_passed and volume_passed and sell_g4 and memory_passed and sell_g6
+    sell_passed = g1_passed and volatility_passed and volume_passed and sell_g4 and memory_passed and sell_g6
 
-    # 6. Final Execution Decision
+    # 5. Final Decision
     if buy_passed:
         action = "BUY"
     elif sell_passed:
@@ -128,7 +119,7 @@ def analyze_candle(payload: CandlePayload):
     else:
         action = "HOLD"
 
-    # 7. Log Trade Entries to Supabase Safely
+    # 6. Log Entries
     if action in ["BUY", "SELL"]:
         try:
             payload_dict = payload.model_dump() if hasattr(payload, 'model_dump') else payload.dict()
@@ -141,11 +132,11 @@ def analyze_candle(payload: CandlePayload):
         "probability": ai_prob,
         "active_threshold": dynamic_threshold,
         "buy_gates": {
-            "g1": buy_g1, "g2": volatility_passed, "g3": volume_passed,
+            "g1": g1_passed, "g2": volatility_passed, "g3": volume_passed,
             "g4": buy_g4, "g5": memory_passed, "g6": buy_g6
         },
         "sell_gates": {
-            "g1": sell_g1, "g2": volatility_passed, "g3": volume_passed,
+            "g1": g1_passed, "g2": volatility_passed, "g3": volume_passed,
             "g4": sell_g4, "g5": memory_passed, "g6": sell_g6
         },
         "metrics": metrics,
