@@ -48,17 +48,10 @@ def read_root():
 
 @app.post("/api/analyze")
 def analyze_candle(payload: CandlePayload):
-    # 1. Evaluate Technical Gates
-    gate_1 = payload.close > payload.ema200
-    gate_2 = (payload.high - payload.low) > 0.50
-    gate_3 = payload.volume > 150
-    gate_4 = payload.close > payload.open
-    gate_5 = True  # Memory state flag
-
-    # 2. Get Pre-Calculated News Vector Metrics (<3ms query)
+    # 1. Feature Pre-processing & News Vector Query (<3ms)
     news_vector = news_engine.get_news_feature_vector(payload.time)
 
-    # 3. XGBoost Probability Inference
+    # 2. XGBoost AI Probability Inference
     ai_prob = 0.50
     if xgb_data and "model" in xgb_data:
         try:
@@ -83,15 +76,36 @@ def analyze_candle(payload: CandlePayload):
         except Exception as e:
             print(f"[Main] XGBoost inference warning: {e}")
 
-    gate_6 = ai_prob >= 0.65
-    all_gates_passed = gate_1 and gate_2 and gate_3 and gate_4 and gate_5 and gate_6
+    # 3. Common Technical Filters (Vol & Range Filters)
+    volatility_passed = (payload.high - payload.low) > 0.50
+    volume_passed = payload.volume > 150
+    memory_passed = True
 
-    # 4. Target Metrics from Memory
+    # 4. BUY Gates Check
+    buy_g1 = payload.close > payload.ema200     # Trend Filter (Above EMA)
+    buy_g4 = payload.close > payload.open       # Bullish Candle Body
+    buy_g6 = ai_prob >= 0.60                    # XGBoost Bullish Confidence (>= 60%)
+    buy_passed = buy_g1 and volatility_passed and volume_passed and buy_g4 and memory_passed and buy_g6
+
+    # 5. SELL Gates Check
+    sell_g1 = payload.close < payload.ema200    # Trend Filter (Below EMA)
+    sell_g4 = payload.close < payload.open      # Bearish Candle Body
+    sell_g6 = (1.0 - ai_prob) >= 0.60           # XGBoost Bearish Confidence (<= 40% Bullish = >= 60% Bearish)
+    sell_passed = sell_g1 and volatility_passed and volume_passed and sell_g4 and memory_passed and sell_g6
+
+    # 6. Action Signal Evaluation
+    if buy_passed:
+        action = "BUY"
+    elif sell_passed:
+        action = "SELL"
+    else:
+        action = "HOLD"
+
+    # 7. Get Dynamic Risk & Memory Target Metrics
     metrics = memory_engine.get_active_metrics()
-    action = "BUY" if all_gates_passed else "HOLD"
 
-    # 5. Log Entry to Supabase Safely
-    if action == "BUY":
+    # 8. Log Order Entry to Supabase Safely
+    if action in ["BUY", "SELL"]:
         try:
             payload_dict = payload.model_dump() if hasattr(payload, 'model_dump') else payload.dict()
             trade_logger.log_trade_entry(payload_dict, action, metrics, news_vector)
@@ -101,9 +115,13 @@ def analyze_candle(payload: CandlePayload):
     return {
         "action": action,
         "probability": ai_prob,
-        "gates": {
-            "g1": gate_1, "g2": gate_2, "g3": gate_3,
-            "g4": gate_4, "g5": gate_5, "g6": gate_6
+        "buy_gates": {
+            "g1": buy_g1, "g2": volatility_passed, "g3": volume_passed,
+            "g4": buy_g4, "g5": memory_passed, "g6": buy_g6
+        },
+        "sell_gates": {
+            "g1": sell_g1, "g2": volatility_passed, "g3": volume_passed,
+            "g4": sell_g4, "g5": memory_passed, "g6": sell_g6
         },
         "metrics": metrics,
         "news_vector": news_vector
