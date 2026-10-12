@@ -1,3 +1,4 @@
+from typing import List
 import joblib
 import numpy as np
 import pandas as pd
@@ -7,10 +8,10 @@ from pydantic import BaseModel
 
 app = FastAPI(
     title="XAUUSD AI Trading & Analysis API",
-    version="2.1",
+    version="2.2",
     description=(
-        "Lightweight backend serving pre-trained XGBoost model using EMA 10"
-        " features, market diagnostics, and safe EA integration."
+        "Lightweight backend serving pre-trained XGBoost model with"
+        " multi-timeframe top-3 probability ranking and market diagnostics."
     ),
 )
 
@@ -30,6 +31,11 @@ def load_model_artifact():
 
 
 class PredictionRequest(BaseModel):
+  ema_10: float
+
+
+class MultiTFRequest(BaseModel):
+  timeframe: str
   ema_10: float
 
 
@@ -81,6 +87,50 @@ def predict(payload: PredictionRequest):
     }
   except Exception as e:
     raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
+
+
+@app.post("/api/predict_top_setups")
+def predict_top_setups(
+    payload: List[MultiTFRequest], min_confidence: float = 0.50
+):
+  """Evaluates multiple timeframes/models in batch and returns the top 3 highest probability trade setups."""
+  if model is None:
+    raise HTTPException(
+        status_code=503, detail="Model artifact unavailable on server."
+    )
+
+  results = []
+  for item in payload:
+    try:
+      X_input = pd.DataFrame([[item.ema_10]], columns=["ema_10"])
+      probabilities = (
+          model.predict_proba(X_input)[0].tolist()
+          if hasattr(model, "predict_proba")
+          else [0.5, 0.5]
+      )
+
+      prediction = int(np.argmax(probabilities))
+      highest_prob = max(probabilities)
+
+      if highest_prob >= min_confidence:
+        results.append({
+            "timeframe": item.timeframe,
+            "prediction": prediction,
+            "signal": "BUY" if prediction == 1 else "SELL",
+            "probability": round(float(highest_prob), 4),
+            "ema_10": item.ema_10,
+        })
+    except Exception:
+      continue  # Skip invalid items gracefully
+
+  # Sort by highest probability descending and grab top 3
+  top_3 = sorted(results, key=lambda x: x["probability"], reverse=True)[:3]
+
+  return {
+      "total_evaluated": len(payload),
+      "selected_count": len(top_3),
+      "top_trades": top_3,
+  }
 
 
 @app.post("/api/retrain")
