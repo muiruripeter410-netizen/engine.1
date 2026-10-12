@@ -7,10 +7,10 @@ from pydantic import BaseModel
 
 app = FastAPI(
     title="XAUUSD AI Trading & Analysis API",
-    version="2.0",
+    version="2.1",
     description=(
         "Lightweight backend serving pre-trained XGBoost model using EMA 10"
-        " features and XAUUSD market diagnostics."
+        " features, market diagnostics, and safe EA integration."
     ),
 )
 
@@ -65,9 +65,7 @@ def predict(payload: PredictionRequest):
     )
 
   try:
-    # Prepare input feature DataFrame matching training schema
     X_input = pd.DataFrame([[payload.ema_10]], columns=["ema_10"])
-
     prediction = int(model.predict(X_input)[0])
     probabilities = (
         model.predict_proba(X_input)[0].tolist()
@@ -83,3 +81,15 @@ def predict(payload: PredictionRequest):
     }
   except Exception as e:
     raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
+
+
+@app.post("/api/retrain")
+def retrain_model():
+  """Placeholder endpoint to prevent EA 404 errors during offline workflow."""
+  return {
+      "status": "disabled",
+      "message": (
+          "Server-side training is disabled. Use offline training locally and"
+          " push model.joblib."
+      ),
+  }
