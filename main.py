@@ -51,7 +51,7 @@ if SUPABASE_URL and SUPABASE_KEY:
 
 # --- 1. Load M15 Historical Data from Workspace ---
 def load_historical_m15_data() -> pd.DataFrame:
-  """Loads xauusd_m15_2023_2026.csv dataset from workspace[cite: 2]."""
+  """Loads xauusd_m15_2023_2026.csv dataset from workspace."""
   csv_path = "xauusd_m15_2023_2026.csv"
   try:
     if os.path.exists(csv_path):
@@ -67,7 +67,7 @@ def load_historical_m15_data() -> pd.DataFrame:
         df["time"] = pd.to_datetime(df["time"])
       logger.info(
           f"[M15 Loader] Successfully loaded {len(df)} rows of historical M15"
-          " data[cite: 2]."
+          " data."
       )
       return df
     else:
@@ -83,7 +83,6 @@ def load_historical_m15_data() -> pd.DataFrame:
 
 # --- 2. Custom GMADL Objective for XGBoost ---
 def gmadl_objective(preds, dtrain):
-  """Generalized Mean Absolute Directional Loss (GMADL) custom objective."""
   labels = dtrain.get_label()
   b = 1.0
   p = 1.0 / (1.0 + np.exp(-preds))
@@ -124,7 +123,6 @@ def train_and_sync_laboratory_models():
     )
     return
 
-  # Feature Engineering matching model_laboratory.py
   df["returns"] = df["close"].pct_change().fillna(0)
   df["high_low_ratio"] = (
       (df["high"] - df["low"]) / df["close"]
@@ -164,13 +162,11 @@ def train_and_sync_laboratory_models():
   X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
   y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
 
-  # Train GMADL XGBoost
   dtrain = xgb.DMatrix(X_train, label=y_train)
   params = {"max_depth": 4, "eta": 0.05, "subsample": 0.8, "eval_metric": "logloss"}
   xgb_booster = xgb.train(params, dtrain, num_boost_round=100, obj=gmadl_objective)
   gmadl_model = XGBWrapper(xgb_booster)
 
-  # The 4 Laboratory Models
   candidates = {
       "Logistic_Regression": LogisticRegression(max_iter=500),
       "Random_Forest": RandomForestClassifier(
@@ -204,7 +200,6 @@ def train_and_sync_laboratory_models():
       score = float((acc * 35.0) + (auc * 40.0) + (f1 * 25.0))
       logger.info(f"[Laboratory] Model {name} Score: {score:.2f}/100")
 
-      # Offload artifacts to Supabase Storage (preventing Render memory full errors)
       if supabase_client:
         try:
           local_tmp = f"/tmp/{name}.pkl"
@@ -228,17 +223,13 @@ def train_and_sync_laboratory_models():
         f"[Champion] Selected Champion: {best_name} with Score:"
         f" {best_score:.2f}/100"
     )
-
-    # Map champion across all timeframes (M1, M5, M15, H1, H4)
     for tf in TIMEFRAMES:
       loaded_models[tf] = champion_model
 
 
-# Run training routine at startup
 train_and_sync_laboratory_models()
 
 
-# --- Pydantic Data Schemas ---
 class MarketInput(BaseModel):
   timeframe: str = Field(
       ..., example="M15", description="Timeframe identifier (M1, M5, M15, H1, H4)"
@@ -251,7 +242,7 @@ class TradeSetupResponse(BaseModel):
   timeframe: str
   prediction: int
   signal: str
-  probability_score: float  # Combined model + TOS percentage (0-100%)
+  probability_score: float
   entry: float
   sl: float
   tp: float
@@ -263,12 +254,7 @@ class PredictionOutput(BaseModel):
   top_trades: List[TradeSetupResponse]
 
 
-# --- 4. Historical Day-Matching Loop (2023-2026 Comparison) ---
 def execute_historical_day_matching_loop(df_historical: pd.DataFrame) -> float:
-  """Compares today's date (month/day) with historical M15 data from 2023,
-
-  2024, and 2025 to extract pattern consistency and return a TOS system score.
-  """
   now = datetime.now(timezone.utc)
   target_month = now.month
   target_day = now.day
@@ -292,18 +278,13 @@ def execute_historical_day_matching_loop(df_historical: pd.DataFrame) -> float:
   return 65.0
 
 
-# --- 5. Spread-Aware Loss Equation & Range Calculator ---
 def calculate_spread_aware_risk_levels(
     signal: str, entry_price: float, current_spread: float
 ) -> tuple:
-  """Calculates Stop Loss and Take Profit ranges factoring in average tick spreads
-
-  so orders are not stopped out by market friction.
-  """
   spread_buffer = max(2.00, (current_spread * 0.05))
   base_risk_distance = 3.50
   adjusted_risk_distance = base_risk_distance + spread_buffer
-  reward_distance = adjusted_risk_distance * 2.2  # 1:2.2 Risk-Reward ratio
+  reward_distance = adjusted_risk_distance * 2.2
 
   if signal == "BUY":
     sl = round(entry_price - adjusted_risk_distance, 2)
@@ -315,7 +296,6 @@ def calculate_spread_aware_risk_levels(
   return sl, tp
 
 
-# --- Root Health Check ---
 @app.get("/")
 def read_root():
   return {
@@ -329,7 +309,6 @@ def read_root():
   }
 
 
-# --- Core Prediction Endpoint ---
 @app.post("/api/predict_top_setups", response_model=PredictionOutput)
 def predict_top_setups(payload: List[MarketInput]):
   try:
@@ -347,10 +326,7 @@ def predict_top_setups(payload: List[MarketInput]):
       tf = item.timeframe
       current_ema = item.ema_10
 
-      # 1. Run Historical Day-Matching Loop (2023-2025 vs Today)
       historical_tos_score = execute_historical_day_matching_loop(df_hist)
-
-      # 2. Multi-Timeframe Model Inference Routing
       active_model = loaded_models.get(tf) or champion_model
       raw_prob = 0.52
       prediction = 1
@@ -365,15 +341,12 @@ def predict_top_setups(payload: List[MarketInput]):
           pass
 
       signal = "BUY" if prediction == 1 else "SELL"
-
-      # 3. Combine ML Probability and TOS System Score into a 100% Scale Score
       ml_percentage = raw_prob * 100.0
       final_probability_score = round(
           float(np.clip((ml_percentage * 0.60) + (historical_tos_score * 0.40), 0.0, 100.0)),
           2,
       )
 
-      # 4. Spread-Aware Loss Equation & Risk Levels
       entry = round(current_ema, 2)
       sl, tp = calculate_spread_aware_risk_levels(signal, entry, current_spread)
 
@@ -387,12 +360,6 @@ def predict_top_setups(payload: List[MarketInput]):
               sl=sl,
               tp=tp,
           )
-      )
-
-      logger.info(
-          f"[Forecasting Cycle] TF: {tf} | Signal: {signal} | Score:"
-          f" {final_probability_score}% | Entry: {entry} | SL: {sl} | TP:"
-          f" {tp} | Spread: {current_spread}"
       )
 
     return PredictionOutput(
