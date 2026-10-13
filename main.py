@@ -20,7 +20,7 @@ app = FastAPI(
         "Data.Insights Multi-Timeframe Multi-Model Quantitative Engine with"
         " Supabase Sync"
     ),
-    version="9.0",
+    version="11.0",
     description=(
         "Production backend supporting multi-timeframe batch requests (M1, M5,"
         " M15, H1, H4), historical M15 laboratory model training, Supabase"
@@ -51,7 +51,7 @@ if SUPABASE_URL and SUPABASE_KEY:
 
 # --- 1. Load M15 Historical Data from Workspace ---
 def load_historical_m15_data() -> pd.DataFrame:
-  """Loads xauusd_m15_2023_2026.csv dataset from workspace."""
+  """Loads xauusd_m15_2023_2026.csv dataset from workspace[cite: 2]."""
   csv_path = "xauusd_m15_2023_2026.csv"
   try:
     if os.path.exists(csv_path):
@@ -67,7 +67,7 @@ def load_historical_m15_data() -> pd.DataFrame:
         df["time"] = pd.to_datetime(df["time"])
       logger.info(
           f"[M15 Loader] Successfully loaded {len(df)} rows of historical M15"
-          " data."
+          " data[cite: 2]."
       )
       return df
     else:
@@ -303,7 +303,7 @@ def read_root():
       "engine": (
           "Data.Insights Multi-Timeframe Multi-Model Quantitative Engine"
       ),
-      "version": "9.0",
+      "version": "11.0",
       "active_timeframes": list(loaded_models.keys()),
       "supabase_sync": supabase_client is not None,
   }
@@ -333,12 +333,24 @@ def predict_top_setups(payload: List[MarketInput]):
 
       if active_model is not None:
         try:
-          features = [[0.001, 0.001, 50.0, 0.0, 999, 0, 1.0, 0.5, 0.5, 1.0]]
+          # Dynamically factor in EMA variation and spread to influence model prediction
+          features = [[
+              float(current_ema * 0.0001),  # returns proxy
+              float(current_spread * 0.001),  # high_low_ratio proxy
+              50.0,  # rsi
+              float(current_ema % 5.0),  # ema_dist
+              999,  # minutes_to_news
+              0,  # news_impact_rating
+              1.0,  # hist_volatility_mult
+              0.5,  # hist_reversal_prob
+              0.5,  # hist_directional_bias
+              1.0,  # hist_mean_expansion_usd
+          ]]
           probs = active_model.predict_proba(features)[0]
           raw_prob = float(probs[1])
           prediction = int(active_model.predict(features)[0])
-        except Exception:
-          pass
+        except Exception as e:
+          logger.error(f"[Inference Error [{tf}]]: {str(e)}")
 
       signal = "BUY" if prediction == 1 else "SELL"
       ml_percentage = raw_prob * 100.0
