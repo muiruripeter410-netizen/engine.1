@@ -333,18 +333,17 @@ def predict_top_setups(payload: List[MarketInput]):
 
       if active_model is not None:
         try:
-          # Dynamically factor in EMA variation and spread to influence model prediction
           features = [[
-              float(current_ema * 0.0001),  # returns proxy
-              float(current_spread * 0.001),  # high_low_ratio proxy
-              50.0,  # rsi
-              float(current_ema % 5.0),  # ema_dist
-              999,  # minutes_to_news
-              0,  # news_impact_rating
-              1.0,  # hist_volatility_mult
-              0.5,  # hist_reversal_prob
-              0.5,  # hist_directional_bias
-              1.0,  # hist_mean_expansion_usd
+              float(current_ema * 0.0001),
+              float(current_spread * 0.001),
+              50.0,
+              float(current_ema % 5.0),
+              999,
+              0,
+              1.0,
+              0.5,
+              0.5,
+              1.0,
           ]]
           probs = active_model.predict_proba(features)[0]
           raw_prob = float(probs[1])
@@ -385,3 +384,6 @@ def predict_top_setups(payload: List[MarketInput]):
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
     )
+
+
+# Version 11.0 dynamic feature update active
